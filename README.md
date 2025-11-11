@@ -1,4 +1,4 @@
-# hawkeye: AI-Powered Real-Time Surveillance System
+# Hawkeye: AI-Powered Real-Time Surveillance System
 
 ## Description
 
