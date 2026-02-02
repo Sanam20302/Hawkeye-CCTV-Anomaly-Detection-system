@@ -1,62 +1,100 @@
 import cv2
-import streamlit as st
-from crowd_ops import handle_crowd_detection
-from trespassing_ops import is_in_zone, handle_trespassing_alert, draw_trespassing_zone
-from loitering_ops import is_loitering_active, handle_loitering_alert
+import numpy as np
 
-def process_frame_annotations(frame, outputs, current_time, track_history, loitering_saved, settings, face_models, trusted_embeddings):
-    """
-    Orchestrates detection logic by calling specialized modules.
-    """
-    num_people = 0
+# --- Colors ---
+MAROON = (0, 0, 128)      
+RED_ALERT = (0, 0, 255)  
+ZONE_COLOR = (0, 0, 255)  
+
+def check_trespassing(bbox, zone_coords):
+    x1, y1, x2, y2 = bbox
+    # Check if the "feet" are in the zone
+    foot_x, foot_y = int((x1 + x2) / 2), int(y2)
+    zx1, zy1, zx2, zy2 = zone_coords
+    return zx1 < foot_x < zx2 and zy1 < foot_y < zy2
+
+def check_loitering(track_id, center_point, track_history, current_time, threshold):
+    if track_id not in track_history:
+        track_history[track_id].append((current_time, center_point))
+        return False
     
-    for output in outputs:
-        # Get DeepSORT output
-        x1, y1, x2, y2 = output.to_tlbr()
-        track_id = output.track_id
+    first_time = track_history[track_id][0][0]
+    duration = current_time - first_time
+    track_history[track_id].append((current_time, center_point))
+
+    if duration > threshold:
+        return True
+    return False
+
+def process_frame_annotations(frame, tracks, current_time, track_history, loitering_saved, settings):
+    annotated_frame = frame.copy()
+    
+    # 1. Draw Transparent Restricted Zone
+    if settings['trespassing_enabled']:
+        tz = settings['trespassing_zone']
+        
+        overlay = annotated_frame.copy()
+        cv2.rectangle(overlay, (tz[0], tz[1]), (tz[2], tz[3]), ZONE_COLOR, -1)
+        
+        alpha = 0.3
+        cv2.addWeighted(overlay, alpha, annotated_frame, 1 - alpha, 0, annotated_frame)
+        
+        cv2.rectangle(annotated_frame, (tz[0], tz[1]), (tz[2], tz[3]), MAROON, 2)
+        cv2.putText(annotated_frame, "Restricted Zone", (tz[0], tz[1]-10), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, MAROON, 2)
+
+    frame_alerts = {
+        'count': 0,
+        'trespassing': False,
+        'loitering': False,
+        'crowd': False
+    }
+
+    for track in tracks:
+        # Standard filter to avoid ghost tracks
+        if not track.is_confirmed() and track.time_since_update > 1:
+            continue
+        
+        frame_alerts['count'] += 1
+        track_id = track.track_id
+        
+        ltrb = track.to_ltrb()
+        x1, y1, x2, y2 = int(ltrb[0]), int(ltrb[1]), int(ltrb[2]), int(ltrb[3])
         bbox = (x1, y1, x2, y2)
-        
-        # Track history update
-        if track_id not in track_history:
-            track_history[track_id] = [current_time]
-        else:
-            track_history[track_id].append(current_time)
+        center = (int((x1+x2)/2), int((y1+y2)/2))
 
-        # Default Label
-        loitering_text = "Normal"
-        color = (255, 0, 0) # Blue for normal
+        # Check Trespassing
+        if settings['trespassing_enabled'] and check_trespassing(bbox, settings['trespassing_zone']):
+            frame_alerts['trespassing'] = True
 
-        # --- Priority 1: Check Trespassing ---
-        if is_in_zone(bbox, settings):
-            color = (0, 255, 0) # Green for trespassing
-            loitering_text = "Trespassing"
-            handle_trespassing_alert(frame, track_id)
-
-        # --- Priority 2: Check Loitering ---
-        elif settings['loitering_enabled'] and is_loitering_active(track_id, current_time, track_history, settings['loitering_threshold']):
-            color = (0, 0, 255) # Red for loitering
-            loitering_text = f"Loitering {current_time - track_history[track_id][0]:.1f}s"
-            
-            # Delegate complex alert logic to the loitering module
-            handle_loitering_alert(
-                frame, 
-                track_id, 
-                loitering_saved, 
-                face_models, 
-                trusted_embeddings
-            )
-
-        # Draw Bounding Box & Label
-        cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
-        cv2.putText(frame, f"ID {track_id} {loitering_text}", (int(x1), int(y1) - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
-        
-        num_people += 1
-
-    # --- Draw Overlays ---
-    draw_trespassing_zone(frame, settings)
+        # Check Loitering
+        if settings['loitering_enabled']:
+            if check_loitering(track_id, center, track_history, current_time, settings['loitering_threshold']):
+                frame_alerts['loitering'] = True
+                loitering_saved[track_id] = True
     
-    # --- Handle Crowd Detection ---
-    frame = handle_crowd_detection(frame, num_people, settings)
+    #check crowd
+    if settings['crowd_enabled'] and frame_alerts['count'] > settings['crowd_threshold']:
+        frame_alerts['crowd'] = True
 
-    return frame
+
+    y_pos = 20
+    cv2.putText(annotated_frame, f"People Count: {frame_alerts['count']}", (10, y_pos), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, MAROON, 2)
+    
+    if frame_alerts['crowd']:
+        y_pos += 20
+        cv2.putText(annotated_frame, "Crowd Alert!", (10, y_pos), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, RED_ALERT, 2)
+
+    if frame_alerts['loitering']:
+        y_pos += 20
+        cv2.putText(annotated_frame, "Loitering Alert!", (10, y_pos), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, RED_ALERT, 2)
+
+    if frame_alerts['trespassing']:
+        y_pos += 20
+        cv2.putText(annotated_frame, "Trespassing Alert!", (10, y_pos), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, RED_ALERT, 2)
+
+    return annotated_frame, frame_alerts
