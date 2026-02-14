@@ -1,5 +1,6 @@
-opencv-python
-numpy
+streamlit
+opencv-python<4.10
+numpy<2.0
 ultralytics
 deep-sort-realtime
 torch
@@ -7,8 +8,9 @@ torchvision
 Pillow
 mtcnn
 facenet-pytorch
-dotenv
+python-dotenv
 fastapi
 python-multipart
 setuptools==69.5.1
 uvicorn
+requests
