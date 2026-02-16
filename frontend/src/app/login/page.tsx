@@ -47,7 +47,7 @@ export default function LoginPage() {
                     <div className="w-16 h-16 bg-primary/20 rounded-xl flex items-center justify-center text-primary border border-primary/50 shadow-[0_0_30px_-5px_var(--color-primary)]">
                         <Video className="w-8 h-8" />
                     </div>
-                    <h1 className="text-3xl font-bold tracking-wider text-white">HAWKEYE</h1>
+                    <h1 className="text-3xl font-bold tracking-wider text-white">Smart CCTV</h1>
                     <p className="text-primary font-mono tracking-widest text-sm">SECURE ACCESS REQ.</p>
                 </div>
 
